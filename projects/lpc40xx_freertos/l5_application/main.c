@@ -1,105 +1,115 @@
 #include <stdio.h>
 
 #include "FreeRTOS.h"
-#include "task.h"
-
 #include "board_io.h"
+#include "cli_handlers.h"
 #include "common_macros.h"
+#include "ff.h"
+#include "mp3_decoder.h"
 #include "periodic_scheduler.h"
+#include "queue.h"
 #include "sj2_cli.h"
+#include "task.h"
+#include "uart.h"
 
-// 'static' to make these functions 'private' to this file
-static void create_blinky_tasks(void);
-static void create_uart_task(void);
-static void blink_task(void *params);
-static void uart_task(void *params);
+QueueHandle_t song_name_q;
+static QueueHandle_t mp3_data_q;
+
+typedef char song_data_t[128];
+typedef char song_name_t[32];
+
+// open file
+void open_mp3_file(char *file_name) {
+  song_data_t buffer = {};
+  FIL file;
+  UINT bytes_written;
+
+  FRESULT result = f_open(&file, file_name, (FA_READ));
+
+  if (FR_OK == result) {
+
+    f_read(&file, buffer, sizeof(buffer), &bytes_written);
+    while (bytes_written != 0) {
+      f_read(&file, buffer, sizeof(buffer), &bytes_written);
+      xQueueSend(mp3_data_q, buffer, portMAX_DELAY);
+      memset(&buffer[0], 0, sizeof(buffer));
+    }
+    f_close(&file);
+  } else {
+    printf("ERROR: Failed to open: %s\n", file_name);
+  }
+}
+
+// reads mp3 file and receives song name from CLI
+void mp3_file_reader_task() {
+  song_name_t song_name = {};
+
+  while (1) {
+    if (xQueueReceive(song_name_q, song_name, portMAX_DELAY)) {
+      open_mp3_file(song_name);
+    }
+  }
+}
+
+void mp3_file_decoder(song_data_t song_data) {
+  for (int i = 0; i < sizeof(song_data_t); i++) {
+    // printf("%s", song_data[i]);
+    putchar(song_data[i]);
+  }
+}
+
+// plays file
+void play_file_task() {
+  song_data_t song_data = {};
+  while (1) {
+    memset(&song_data[0], 0, sizeof(song_data_t));
+    if (xQueueReceive(mp3_data_q, song_data, portMAX_DELAY)) {
+      for (int i = 0; i < 128; i++) {
+        while (!DREQ_status()) {
+          ;
+        }
+        send_mp3Data(song_data[i]);
+      }
+    }
+  }
+}
+
+app_cli_status_e cli__mp3_play(app_cli__argument_t argument, sl_string_t user_input_minus_command_name,
+                               app_cli__print_string_function cli_output) {
+
+  sl_string_t s = user_input_minus_command_name;
+
+  if (sl_string__begins_with_ignore_case(s, "play")) {
+
+    sl_string__erase_first_word(s, ' ');
+
+    // s will be our string name now
+    if (xQueueSend(song_name_q, s, 0)) {
+      // printf("Sent songname\n");
+    } else {
+      printf("Couldn't send songname to queue\n");
+    }
+
+  } else {
+    cli_output(NULL, "Did you mean play?\n");
+  }
+  return APP_CLI_STATUS__SUCCESS;
+}
 
 int main(void) {
-  create_blinky_tasks();
-  create_uart_task();
+  mp3_decoder_setup();
 
-  // If you have the ESP32 wifi module soldered on the board, you can try uncommenting this code
-  // See esp32/README.md for more details
-  // uart3_init();                                                                     // Also include:  uart3_init.h
-  // xTaskCreate(esp32_tcp_hello_world_task, "uart3", 1000, NULL, PRIORITY_LOW, NULL); // Include esp32_task.h
+  setvbuf(stdout, 0, _IONBF, 0);
 
+  mp3_data_q = xQueueCreate(2, sizeof(song_data_t));
+  song_name_q = xQueueCreate(1, sizeof(song_data_t));
+
+  // xTaskCreate(CLI_simulator, "CLI", 1024, NULL, PRIORITY_MEDIUM, NULL);
+  xTaskCreate(mp3_file_reader_task, "reader", 2048 / sizeof(void *), NULL, PRIORITY_MEDIUM, NULL);
+  xTaskCreate(play_file_task, "player", 8192, NULL, PRIORITY_HIGH, NULL);
+  sj2_cli__init();
   puts("Starting RTOS");
   vTaskStartScheduler(); // This function never returns unless RTOS scheduler runs out of memory and fails
 
   return 0;
-}
-
-static void create_blinky_tasks(void) {
-  /**
-   * Use '#if (1)' if you wish to observe how two tasks can blink LEDs
-   * Use '#if (0)' if you wish to use the 'periodic_scheduler.h' that will spawn 4 periodic tasks, one for each LED
-   */
-#if (1)
-  // These variables should not go out of scope because the 'blink_task' will reference this memory
-  static gpio_s led0, led1;
-
-  led0 = board_io__get_led0();
-  led1 = board_io__get_led1();
-
-  xTaskCreate(blink_task, "led0", configMINIMAL_STACK_SIZE, (void *)&led0, PRIORITY_LOW, NULL);
-  xTaskCreate(blink_task, "led1", configMINIMAL_STACK_SIZE, (void *)&led1, PRIORITY_LOW, NULL);
-#else
-  const bool run_1000hz = true;
-  const size_t stack_size_bytes = 2048 / sizeof(void *); // RTOS stack size is in terms of 32-bits for ARM M4 32-bit CPU
-  periodic_scheduler__initialize(stack_size_bytes, !run_1000hz); // Assuming we do not need the high rate 1000Hz task
-  UNUSED(blink_task);
-#endif
-}
-
-static void create_uart_task(void) {
-  // It is advised to either run the uart_task, or the SJ2 command-line (CLI), but not both
-  // Change '#if (0)' to '#if (1)' and vice versa to try it out
-#if (0)
-  // printf() takes more stack space, size this tasks' stack higher
-  xTaskCreate(uart_task, "uart", (512U * 8) / sizeof(void *), NULL, PRIORITY_LOW, NULL);
-#else
-  sj2_cli__init();
-  UNUSED(uart_task); // uart_task is un-used in if we are doing cli init()
-#endif
-}
-
-static void blink_task(void *params) {
-  const gpio_s led = *((gpio_s *)params); // Parameter was input while calling xTaskCreate()
-
-  // Warning: This task starts with very minimal stack, so do not use printf() API here to avoid stack overflow
-  while (true) {
-    gpio__toggle(led);
-    vTaskDelay(500);
-  }
-}
-
-// This sends periodic messages over printf() which uses system_calls.c to send them to UART0
-static void uart_task(void *params) {
-  TickType_t previous_tick = 0;
-  TickType_t ticks = 0;
-
-  while (true) {
-    // This loop will repeat at precise task delay, even if the logic below takes variable amount of ticks
-    vTaskDelayUntil(&previous_tick, 2000);
-
-    /* Calls to fprintf(stderr, ...) uses polled UART driver, so this entire output will be fully
-     * sent out before this function returns. See system_calls.c for actual implementation.
-     *
-     * Use this style print for:
-     *  - Interrupts because you cannot use printf() inside an ISR
-     *    This is because regular printf() leads down to xQueueSend() that might block
-     *    but you cannot block inside an ISR hence the system might crash
-     *  - During debugging in case system crashes before all output of printf() is sent
-     */
-    ticks = xTaskGetTickCount();
-    fprintf(stderr, "%u: This is a polled version of printf used for debugging ... finished in", (unsigned)ticks);
-    fprintf(stderr, " %lu ticks\n", (xTaskGetTickCount() - ticks));
-
-    /* This deposits data to an outgoing queue and doesn't block the CPU
-     * Data will be sent later, but this function would return earlier
-     */
-    ticks = xTaskGetTickCount();
-    printf("This is a more efficient printf ... finished in");
-    printf(" %lu ticks\n\n", (xTaskGetTickCount() - ticks));
-  }
 }

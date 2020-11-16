@@ -1,12 +1,14 @@
 /* SIBROS TECHNOLOGIES, INC. CONFIDENTIAL
  * Copyright (c) 2018 - 2019 Sibros Technologies, Inc.
  * All Rights Reserved.
- * NOTICE: All information contained herein is, and remains the property of Sibros Technologies,
- * Inc. and its suppliers, if any. The intellectual and technical concepts contained herein are
- * proprietary to Sibros Technologies, Inc. and its suppliers and may be covered by U.S. and Foreign
- * Patents, patents in process, and are protected by trade secret or copyright law. Dissemination of
- * this information or reproduction of this material is strictly forbidden unless prior written
- * permission is obtained from Sibros Technologies, Inc.
+ * NOTICE: All information contained herein is, and remains the property of
+ * Sibros Technologies, Inc. and its suppliers, if any. The intellectual and
+ * technical concepts contained herein are proprietary to Sibros Technologies,
+ * Inc. and its suppliers and may be covered by U.S. and Foreign Patents,
+ * patents in process, and are protected by trade secret or copyright law.
+ * Dissemination of this information or reproduction of this material is
+ * strictly forbidden unless prior written permission is obtained from Sibros
+ * Technologies, Inc.
  */
 
 #include <string.h>
@@ -45,8 +47,9 @@ static const app_cli__command_s *app_cli__private_find_short_command(const app_c
 
   while (NULL != iterator) {
     /**
-     * If the command is "sibros 123", we are checking if this 'input_string' begins with our command name but
-     * we only want to match a limited number of chars of this command (cli->minimum_command_chars_to_match)
+     * If the command is "sibros 123", we are checking if this 'input_string'
+     * begins with our command name but we only want to match a limited number
+     * of chars of this command (cli->minimum_command_chars_to_match)
      */
     if (sl_string__begins_with_limited_chars(input_string, iterator->command_name,
                                              cli->minimum_command_chars_to_match)) {
@@ -77,7 +80,8 @@ static void app_cli__private_handle_command(app_cli_s *cli, const app_cli__comma
 
 static void app_cli__private_print_list_of_all_commands(const app_cli_s *cli, app_cli__argument_t cli_argument,
                                                         sl_string_t output) {
-  (void)sl_string__printf(output, "\r\nList of commands (use help <name> to get full help if you see ...): \r\n");
+  (void)sl_string__printf(output, "\r\nList of commands (use help <name> to "
+                                  "get full help if you see ...): \r\n");
   cli->output_function(cli_argument, output);
 
   const size_t max_help_chars_to_print = 50;
@@ -90,7 +94,8 @@ static void app_cli__private_print_list_of_all_commands(const app_cli_s *cli, ap
       (void)sl_string__printf(output, "  %16s : %s", iterator->command_name, iterator->help_message_for_command);
     }
 
-    // If a command's help is multi-line, truncate it at that position and add "...." to indicate 'see more help'
+    // If a command's help is multi-line, truncate it at that position and add
+    // "...." to indicate 'see more help'
     const bool ends_with_carriage_return = sl_string__erase_at_substring(output, "\r");
     const bool ends_with_newline = sl_string__erase_at_substring(output, "\n");
     if (ends_with_carriage_return || ends_with_newline) {
@@ -190,7 +195,8 @@ void app_cli__process_input(app_cli_s *cli, app_cli__argument_t cli_argument, sl
     app_cli__private_process_input(cli, cli_argument, input_string);
   }
 
-  // Send a terminator to signal to any receiver that we are done outputting all output from our handlers
+  // Send a terminator to signal to any receiver that we are done outputting all
+  // output from our handlers
   if (NULL != cli->terminal_string) {
     cli->output_function(cli_argument, cli->terminal_string);
   }
